@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 
 const openai = new OpenAI({
   apiKey: process.env.NEXT_PUBLIC_OPENAI_API_KEY,
@@ -7,9 +8,102 @@ const openai = new OpenAI({
 
 export type ChatModel = 'gpt-4.1-mini' | 'gpt-4o-mini-audio-preview';
 
+interface TextContent {
+  type: 'text';
+  text: string;
+}
+
+interface ImageUrlContent {
+  type: 'image_url';
+  image_url: {
+    url: string;
+  };
+}
+
+type MessageContent = string | (TextContent | ImageUrlContent)[];
+
 export interface Message {
   role: 'user' | 'assistant';
-  content: string;
+  content: MessageContent;
+}
+
+function convertToApiMessage(msg: Message): ChatCompletionMessageParam {
+  return {
+    role: msg.role,
+    content: typeof msg.content === 'string' ? msg.content : 
+      msg.content.map(item => {
+        if (item.type === 'text') return item.text;
+        return { type: 'image_url', image_url: item.image_url };
+      })
+  } as ChatCompletionMessageParam;
+}
+
+async function handleMiniModel(messages: Message[]) {
+  const requestBody = {
+    model: 'gpt-4.1-mini' as const,
+    messages: messages.map(convertToApiMessage),
+    temperature: 1,
+    max_tokens: 2048,
+    top_p: 1,
+    frequency_penalty: 0,
+    presence_penalty: 0,
+    response_format: { type: 'text' as const }
+  };
+
+  const completion = await openai.chat.completions.create(requestBody);
+  
+  if (!completion.choices || completion.choices.length === 0) {
+    throw new Error('API 응답에 choices가 없습니다.');
+  }
+
+  const messageContent = completion.choices[0].message.content;
+  if (!messageContent) {
+    throw new Error('API 응답에 content가 없습니다.');
+  }
+
+  return messageContent;
+}
+
+async function handleAudioPreviewModel(messages: Message[]) {
+  const requestBody = {
+    model: 'gpt-4o-mini-audio-preview' as const,
+    messages: messages.map(msg => ({
+      role: msg.role,
+      content: typeof msg.content === 'string' ? msg.content : 
+        msg.content.find((item): item is TextContent => item.type === 'text')?.text || ''
+    })) as ChatCompletionMessageParam[],
+    temperature: 1,
+    max_tokens: 2048,
+    top_p: 1,
+    frequency_penalty: 0,
+    presence_penalty: 0,
+    modalities: ['text', 'audio'] as ('text' | 'audio')[],
+    audio: {
+      voice: 'alloy' as const,
+      format: 'pcm16' as const
+    }
+  };
+
+  const completion = await openai.chat.completions.create(requestBody);
+
+  if (!completion.choices || completion.choices.length === 0) {
+    throw new Error('API 응답에 choices가 없습니다.');
+  }
+
+  const messageContent = completion.choices[0].message.content;
+  if (!messageContent) {
+    throw new Error('API 응답에 content가 없습니다.');
+  }
+
+  if (Array.isArray(messageContent)) {
+    const textContent = messageContent.find((item: any) => item.type === 'text');
+    if (!textContent) {
+      throw new Error('audio-preview 모델 응답에서 텍스트 컨텐츠를 찾을 수 없습니다.');
+    }
+    return textContent.text;
+  }
+
+  return messageContent;
 }
 
 export async function getChatCompletion(messages: Message[], model: ChatModel = 'gpt-4.1-mini') {
@@ -17,53 +111,10 @@ export async function getChatCompletion(messages: Message[], model: ChatModel = 
     console.log('Using model:', model);
     console.log('Messages:', messages);
 
-    const requestBody: any = {
-      model: model,
-      messages: messages.map(msg => ({
-        role: msg.role,
-        content: msg.content
-      })),
-      temperature: 1,
-      max_completion_tokens: 2048,
-      top_p: 1,
-      frequency_penalty: 0,
-      presence_penalty: 0,
-      store: false
-    };
-
-    // audio 모델인 경우 추가 설정
-    if (model === 'gpt-4o-mini-audio-preview') {
-      requestBody.modalities = ['text', 'audio'];
-      requestBody.audio = {
-        voice: 'alloy',
-        format: 'pcm16'
-      };
-      console.log('Audio model configuration:', {
-        modalities: requestBody.modalities,
-        audio: requestBody.audio
-      });
-    }
-
-    // response_format 설정 (gpt-4.1-mini 모델용)
     if (model === 'gpt-4.1-mini') {
-      requestBody.response_format = {
-        type: 'text'
-      };
-    }
-
-    console.log('Final request body:', JSON.stringify(requestBody, null, 2));
-
-    try {
-      const completion = await openai.chat.completions.create(requestBody);
-      console.log('API Response:', completion);
-      return completion.choices[0].message.content;
-    } catch (apiError: any) {
-      console.error('OpenAI API Error:', {
-        error: apiError,
-        message: apiError.message,
-        response: apiError.response?.data
-      });
-      throw new Error(`OpenAI API Error: ${apiError.message}`);
+      return await handleMiniModel(messages);
+    } else {
+      return await handleAudioPreviewModel(messages);
     }
   } catch (error) {
     console.error('Error in getChatCompletion:', error);

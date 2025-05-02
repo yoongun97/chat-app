@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, ClipboardEvent } from 'react';
 import { useSession, signOut } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
@@ -9,12 +9,17 @@ import { getChatCompletion, Message, ChatModel } from '@/lib/openai';
 import toast from 'react-hot-toast';
 import { Bars3Icon as MenuIcon } from '@heroicons/react/24/outline';
 
+type MessageRole = 'user' | 'assistant';
+type MessageType = 'text' | 'image';
+
 interface ChatMessage {
   id: string;
   chat_id: string;
   content: string;
-  role: 'user' | 'assistant';
+  role: MessageRole;
   created_at: string;
+  type: MessageType;
+  image_url?: string;
 }
 
 interface ChatThread {
@@ -55,6 +60,7 @@ export default function ChatPage({ chatId }: Props) {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<ChatModel>('gpt-4.1-mini');
   const [isNewChatModalOpen, setIsNewChatModalOpen] = useState(false);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
 
   // Fetch chat threads
   useEffect(() => {
@@ -397,27 +403,100 @@ export default function ChatPage({ chatId }: Props) {
     }
   };
 
+  // 이미지 붙여넣기 처리
+  const handlePaste = async (e: ClipboardEvent<HTMLInputElement>) => {
+    const items = e.clipboardData?.items;
+    
+    if (!items) return;
+
+    // audio-preview 모델인 경우 이미지 붙여넣기 비활성화
+    if (currentChat?.model === 'gpt-4o-mini-audio-preview') {
+      if (Array.from(items).some(item => item.type.indexOf('image') !== -1)) {
+        e.preventDefault();
+        toast.error('Audio Preview 모델에서는 이미지 분석을 사용할 수 없습니다.');
+      }
+      return;
+    }
+
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf('image') !== -1) {
+        e.preventDefault();
+        
+        const file = items[i].getAsFile();
+        if (!file) continue;
+
+        // 이미지를 base64로 변환
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const base64Image = event?.target?.result as string;
+          setImagePreview(base64Image);
+        };
+        reader.readAsDataURL(file);
+        break;
+      }
+    }
+  };
+
+  // 이미지 취소
+  const handleCancelImage = () => {
+    setImagePreview(null);
+  };
+
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!message.trim() || !selectedChat || isSending || !currentUserId) return;
+    if ((!message.trim() && !imagePreview) || !selectedChat || isSending || !currentUserId) return;
 
     const timestamp = new Date().toISOString();
-    const userMessage = {
-      id: crypto.randomUUID(),
-      chat_id: selectedChat,
-      content: message,
-      role: 'user' as const,
-      created_at: timestamp
-    };
-    
-    setMessages(prev => [...prev, userMessage]);
-    setIsSending(true);
-    setMessage('');
-    
+    let userMessages: ChatMessage[] = [];
+
     try {
+      if (imagePreview) {
+        // 이미지 메시지 추가
+        const imageMessage: ChatMessage = {
+          id: crypto.randomUUID(),
+          chat_id: selectedChat,
+          content: '이미지 메시지',  // 실제 이미지는 image_url에 저장
+          role: 'user',
+          created_at: timestamp,
+          type: 'image',
+          image_url: imagePreview
+        };
+        userMessages.push(imageMessage);
+      }
+
+      if (message.trim()) {
+        // 텍스트 메시지 추가
+        const textMessage: ChatMessage = {
+          id: crypto.randomUUID(),
+          chat_id: selectedChat,
+          content: message.trim(),
+          role: 'user',
+          created_at: timestamp,
+          type: 'text'
+        };
+        userMessages.push(textMessage);
+      }
+
+      // UI 업데이트
+      setMessages(prev => [...prev, ...userMessages]);
+      setIsSending(true);
+      setMessage('');
+      setImagePreview(null);
+
+      // 메시지들 저장 - content와 type 필드만 전송
+      const messagesToSave = userMessages.map(msg => ({
+        id: msg.id,
+        chat_id: msg.chat_id,
+        content: msg.content,
+        role: msg.role,
+        created_at: msg.created_at,
+        type: msg.type,
+        ...(msg.type === 'image' ? { image_url: msg.image_url } : {})
+      }));
+
       const { error: messageError } = await supabase
         .from('messages')
-        .insert([userMessage]);
+        .insert(messagesToSave);
 
       if (messageError) throw messageError;
 
@@ -426,15 +505,18 @@ export default function ChatPage({ chatId }: Props) {
         .from('messages')
         .select('id')
         .eq('chat_id', selectedChat)
-        .eq('role', 'user');  // 유저 메시지만 확인
+        .eq('role', 'user');
 
-      const isFirstUserMessage = !existingUserMessages || existingUserMessages.length === 1;
+      const isFirstUserMessage = !existingUserMessages || existingUserMessages.length <= userMessages.length;
 
+      // 채팅방 제목 업데이트
       const { data: updateData, error: updateError } = await supabase
         .from('chats')
         .update({
           last_visited_at: timestamp,
-          ...(isFirstUserMessage ? { title: message.slice(0, 50) } : {})
+          ...(isFirstUserMessage ? { 
+            title: message.trim() || '이미지 채팅'
+          } : {})
         })
         .eq('id', selectedChat)
         .eq('user_id', currentUserId)
@@ -442,7 +524,7 @@ export default function ChatPage({ chatId }: Props) {
 
       if (updateError) throw updateError;
 
-      // title이 업데이트된 경우 현재 채팅 정보도 업데이트
+      // UI 업데이트
       if (isFirstUserMessage && updateData?.[0]) {
         const updatedChat = updateData[0];
         setCurrentChat(prev => 
@@ -458,23 +540,68 @@ export default function ChatPage({ chatId }: Props) {
         );
       }
 
+      // API 요청용 메시지 준비
       const messageHistory: Message[] = [
-        ...messages.map(msg => ({
-          role: msg.role,
-          content: msg.content
-        })),
-        { role: 'user', content: message }
+        ...messages.map(msg => {
+          if (msg.type === 'image' && msg.image_url) {
+            return {
+              role: 'user',
+              content: [
+                {
+                  type: 'image_url',
+                  image_url: {
+                    url: msg.image_url
+                  }
+                },
+                {
+                  type: 'text',
+                  text: '이 이미지를 분석해주세요.'
+                }
+              ]
+            } as Message;
+          }
+          return {
+            role: msg.role,
+            content: msg.content
+          } as Message;
+        }),
+        ...userMessages.map(msg => {
+          if (msg.type === 'image' && msg.image_url) {
+            return {
+              role: 'user',
+              content: [
+                {
+                  type: 'image_url',
+                  image_url: {
+                    url: msg.image_url
+                  }
+                },
+                {
+                  type: 'text',
+                  text: '이 이미지를 분석해주세요.'
+                }
+              ]
+            } as Message;
+          }
+          return {
+            role: msg.role,
+            content: msg.content
+          } as Message;
+        })
       ];
 
-      const gptResponse = await getChatCompletion(messageHistory, currentChat?.model || 'gpt-4.1-mini');
+      // 이미지가 포함된 경우 gpt-4.1-mini 모델 강제 사용
+      const modelToUse = imagePreview ? 'gpt-4.1-mini' : (currentChat?.model || 'gpt-4.1-mini');
+      const gptResponse = await getChatCompletion(messageHistory, modelToUse);
 
       if (gptResponse) {
-        const assistantMessage = {
+        const assistantMessage: ChatMessage = {
           id: crypto.randomUUID(),
           chat_id: selectedChat,
           content: gptResponse,
-          role: 'assistant' as const,
-          created_at: new Date().toISOString()
+          role: 'assistant',
+          created_at: new Date().toISOString(),
+          type: 'text'
         };
 
         const { error: assistantError } = await supabase
@@ -486,6 +613,7 @@ export default function ChatPage({ chatId }: Props) {
         setMessages(prev => [...prev, assistantMessage]);
       }
 
+      // 채팅 목록 업데이트
       const { data: updatedChats, error: chatsError } = await supabase
         .from('chats')
         .select('*')
@@ -497,8 +625,10 @@ export default function ChatPage({ chatId }: Props) {
       }
 
     } catch (error) {
-      setMessages(prev => prev.filter(msg => msg.id !== userMessage.id));
+      console.error('Error in handleSendMessage:', error);
+      setMessages(prev => prev.filter(msg => !userMessages.find(um => um.id === msg.id)));
       setMessage(message);
+      setImagePreview(imagePreview);
       toast.error('메시지 전송에 실패했습니다. 다시 시도해주세요.');
     } finally {
       setIsSending(false);
@@ -774,7 +904,15 @@ export default function ChatPage({ chatId }: Props) {
                     : 'bg-gray-100 text-gray-800'
                 }`}
               >
-                {msg.content}
+                {msg.type === 'image' ? (
+                  <img 
+                    src={msg.image_url} 
+                    alt="Uploaded content" 
+                    className="max-w-full rounded"
+                  />
+                ) : (
+                  msg.content
+                )}
               </div>
               {msg.role === 'user' && (
                 <div className="w-8 h-8 bg-blue-200 rounded-full flex-shrink-0" />
@@ -795,14 +933,41 @@ export default function ChatPage({ chatId }: Props) {
           )}
         </div>
 
-        {/* 메시지 입력 영역 - 하단에 고정 */}
+        {/* 메시지 입력 영역 */}
         <div className="border-t border-gray-200 bg-white sticky bottom-0 z-30">
+          {currentChat?.model === 'gpt-4o-mini-audio-preview' && (
+            <div className="px-4 py-2 bg-yellow-50 text-yellow-800 text-sm">
+              현재 Audio Preview 모델을 사용 중입니다. 이미지 분석은 사용할 수 없습니다.
+            </div>
+          )}
+          {imagePreview && (
+            <div className="p-2 border-b border-gray-200">
+              <div className="relative inline-block">
+                <img 
+                  src={imagePreview} 
+                  alt="Preview" 
+                  className="max-h-32 rounded"
+                />
+                <button
+                  onClick={handleCancelImage}
+                  className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center hover:bg-red-600"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+          )}
           <form onSubmit={handleSendMessage} className="p-4 flex gap-2">
             <input
               type="text"
               value={message}
               onChange={(e) => setMessage(e.target.value)}
-              placeholder="Type your message..."
+              onPaste={handlePaste}
+              placeholder={
+                currentChat?.model === 'gpt-4o-mini-audio-preview'
+                  ? "메시지를 입력하세요 (이미지 분석 불가)"
+                  : "메시지를 입력하거나 이미지를 붙여넣으세요..."
+              }
               className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-200"
               disabled={isSending}
             />
