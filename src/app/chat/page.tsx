@@ -62,6 +62,7 @@ export default function ChatPage({ params }: PageProps) {
   const [selectedModel, setSelectedModel] = useState<ChatModel>('gpt-4.1-mini');
   const [isNewChatModalOpen, setIsNewChatModalOpen] = useState(false);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // Fetch chat threads
   useEffect(() => {
@@ -165,6 +166,7 @@ export default function ChatPage({ params }: PageProps) {
     fetchChatAndMessages();
   }, [selectedChat]);
 
+  // 세션 체크 및 사용자 데이터 로드
   useEffect(() => {
     const checkAuthAndFetchUser = async () => {
       try {
@@ -173,80 +175,96 @@ export default function ChatPage({ params }: PageProps) {
         }
 
         if (status === 'unauthenticated') {
+          console.log('User is not authenticated, redirecting to home...');
           router.push('/');
           return;
         }
 
-        if (session?.user?.email) {
-          const { data: authUser, error: authError } = await supabase.auth.getUser();
-          
-          if (authError) {
-            return;
-          }
+        if (!session?.user?.email) {
+          console.log('No user email found in session');
+          setError('사용자 정보를 찾을 수 없습니다.');
+          setIsLoading(false);
+          return;
+        }
 
-          const { data: existingUser, error: fetchError } = await supabase
+        const { data: authUser, error: authError } = await supabase.auth.getUser();
+        
+        if (authError) {
+          console.error('Auth error:', authError);
+          setError('인증 오류가 발생했습니다.');
+          setIsLoading(false);
+          return;
+        }
+
+        const { data: existingUser, error: fetchError } = await supabase
+          .from('users')
+          .select('*')
+          .eq('email', session.user.email)
+          .single();
+
+        if (fetchError?.code === 'PGRST116') {
+          const username = session.user.email.split('@')[0];
+          
+          const { data: newUser, error: insertError } = await supabase
             .from('users')
-            .select('*')
-            .eq('email', session.user.email)
+            .insert([
+              {
+                id: authUser.user.id,
+                email: session.user.email,
+                username: username,
+                created_at: new Date().toISOString()
+              }
+            ])
+            .select()
             .single();
 
-          if (fetchError?.code === 'PGRST116') {
-            const username = session.user.email.split('@')[0];
-            
-            const { data: newUser, error: insertError } = await supabase
-              .from('users')
-              .insert([
-                {
-                  id: authUser.user.id,
-                  email: session.user.email,
-                  username: username,
-                  created_at: new Date().toISOString()
-                }
-              ])
-              .select()
-              .single();
+          if (insertError) {
+            console.error('Error creating new user:', insertError);
+            setError('사용자 프로필 생성에 실패했습니다.');
+            setIsLoading(false);
+            return;
+          }
 
-            if (insertError) {
-              toast.error('사용자 프로필 생성에 실패했습니다.');
-              router.push('/');
+          setUserData(newUser);
+          setCurrentUserId(newUser.id);
+          toast.success('새 프로필이 생성되었습니다.');
+        } else if (fetchError) {
+          console.error('Error fetching user:', fetchError);
+          setError('사용자 정보를 불러오는데 실패했습니다.');
+          setIsLoading(false);
+          return;
+        } else {
+          if (existingUser.id !== authUser.user.id) {
+            const { error: updateError } = await supabase
+              .from('users')
+              .update({ id: authUser.user.id })
+              .eq('email', session.user.email);
+            
+            if (updateError) {
+              console.error('Error updating user:', updateError);
+              setError('사용자 정보 업데이트에 실패했습니다.');
+              setIsLoading(false);
               return;
             }
-
-            setUserData(newUser);
-            toast.success('새 프로필이 생성되었습니다.');
-          } else if (fetchError) {
-            toast.error('사용자 정보를 불러오는데 실패했습니다.');
-            router.push('/');
-            return;
-          } else {
-            if (existingUser.id !== authUser.user.id) {
-              const { error: updateError } = await supabase
-                .from('users')
-                .update({ id: authUser.user.id })
-                .eq('email', session.user.email);
+            
+            const { data: updatedUser } = await supabase
+              .from('users')
+              .select('*')
+              .eq('email', session.user.email)
+              .single();
               
-              if (updateError) {
-                toast.error('사용자 정보 업데이트에 실패했습니다.');
-                router.push('/');
-                return;
-              }
-              
-              const { data: updatedUser } = await supabase
-                .from('users')
-                .select('*')
-                .eq('email', session.user.email)
-                .single();
-                
-              if (updatedUser) {
-                setUserData(updatedUser);
-              }
-            } else {
-              setUserData(existingUser);
+            if (updatedUser) {
+              setUserData(updatedUser);
+              setCurrentUserId(updatedUser.id);
             }
+          } else {
+            setUserData(existingUser);
+            setCurrentUserId(existingUser.id);
           }
         }
-      } catch {
-        router.push('/');
+      } catch (err) {
+        console.error('Unexpected error:', err);
+        setError('예기치 않은 오류가 발생했습니다.');
       } finally {
         setIsLoading(false);
       }
@@ -738,8 +756,37 @@ export default function ChatPage({ params }: PageProps) {
     );
   }
 
+  if (error) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <div className="text-center">
+          <h2 className="text-xl font-semibold text-red-600 mb-2">오류가 발생했습니다</h2>
+          <p className="text-gray-600">{error}</p>
+          <button
+            onClick={() => router.push('/')}
+            className="mt-4 px-4 py-2 bg-gray-800 text-white rounded hover:bg-gray-700"
+          >
+            홈으로 돌아가기
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (!userData) {
-    return null;
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <div className="text-center">
+          <h2 className="text-xl font-semibold text-gray-800 mb-2">사용자 정보를 찾을 수 없습니다</h2>
+          <button
+            onClick={() => router.push('/')}
+            className="mt-4 px-4 py-2 bg-gray-800 text-white rounded hover:bg-gray-700"
+          >
+            홈으로 돌아가기
+          </button>
+        </div>
+      </div>
+    );
   }
 
   const handleLogout = async () => {
