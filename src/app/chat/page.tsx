@@ -156,6 +156,119 @@ export default function ChatPage({ params }: PageProps) {
     loadUserData();
   }, [session, isInitializing]);
 
+  // 채팅 스레드 가져오기
+  useEffect(() => {
+    const fetchChatThreads = async () => {
+      if (!currentUserId) return;
+
+      try {
+        const { data: chats, error: chatsError } = await supabase
+          .from('chats')
+          .select('*')
+          .eq('user_id', currentUserId)
+          .order('last_visited_at', { ascending: false });
+
+        if (chatsError) {
+          toast.error('채팅 목록을 불러오는데 실패했습니다.');
+          return;
+        }
+
+        setChatThreads(chats || []);
+
+        const subscription = supabase
+          .channel('chat_updates')
+          .on('postgres_changes', 
+            {
+              event: '*',
+              schema: 'public',
+              table: 'chats',
+              filter: `user_id=eq.${currentUserId}`
+            },
+            async () => {
+              const { data: updatedChats, error: updateError } = await supabase
+                .from('chats')
+                .select('*')
+                .eq('user_id', currentUserId)
+                .order('last_visited_at', { ascending: false });
+
+              if (updateError) {
+                toast.error('채팅 목록 업데이트에 실패했습니다.');
+                return;
+              }
+
+              if (updatedChats) {
+                const filteredChats = updatedChats.filter(chat => chat.user_id === currentUserId);
+                setChatThreads(filteredChats);
+              }
+            }
+          )
+          .subscribe();
+
+        return () => {
+          subscription.unsubscribe();
+        };
+      } catch {
+        toast.error('채팅 목록을 불러오는데 실패했습니다.');
+      }
+    };
+
+    if (!isInitializing && !isLoading && currentUserId) {
+      fetchChatThreads();
+    }
+  }, [currentUserId, isInitializing, isLoading]);
+
+  // 현재 채팅 및 메시지 가져오기
+  useEffect(() => {
+    const fetchChatAndMessages = async () => {
+      if (!selectedChat || isInitializing || isLoading) return;
+
+      try {
+        const { data: chat, error: chatError } = await supabase
+          .from('chats')
+          .select('*')
+          .eq('id', selectedChat)
+          .single();
+
+        if (chatError) {
+          toast.error('채팅 내용을 불러오는데 실패했습니다.');
+          return;
+        }
+
+        if (chat) {
+          setCurrentChat(chat);
+        }
+
+        const { data: chatMessages, error: messagesError } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('chat_id', selectedChat)
+          .order('created_at', { ascending: true });
+
+        if (messagesError) {
+          toast.error('메시지를 불러오는데 실패했습니다.');
+          return;
+        }
+
+        if (chatMessages) {
+          setMessages(chatMessages);
+        }
+      } catch {
+        toast.error('채팅 내용을 불러오는데 실패했습니다.');
+      }
+    };
+
+    if (!isInitializing && !isLoading && selectedChat) {
+      fetchChatAndMessages();
+    }
+  }, [selectedChat, isInitializing, isLoading]);
+
+  // 메시지 스크롤
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+  }, [messages]);
+
   // 로딩 화면
   if (isInitializing || isLoading) {
     return (
@@ -218,108 +331,6 @@ export default function ChatPage({ params }: PageProps) {
       </div>
     );
   }
-
-  // Fetch chat threads
-  useEffect(() => {
-    const fetchChatThreads = async () => {
-      if (!currentUserId) return;
-
-      try {
-        const { data: chats, error: chatsError } = await supabase
-          .from('chats')
-          .select('*')
-          .eq('user_id', currentUserId)
-          .order('last_visited_at', { ascending: false });
-
-        if (chatsError) {
-          toast.error('채팅 목록을 불러오는데 실패했습니다.');
-          return;
-        }
-
-        setChatThreads(chats || []);
-
-        const subscription = supabase
-          .channel('chat_updates')
-          .on('postgres_changes', 
-            {
-              event: '*',
-              schema: 'public',
-              table: 'chats',
-              filter: `user_id=eq.${currentUserId}`
-            },
-            async () => {
-              const { data: updatedChats, error: updateError } = await supabase
-                .from('chats')
-                .select('*')
-                .eq('user_id', currentUserId)
-                .order('last_visited_at', { ascending: false });
-
-              if (updateError) {
-                toast.error('채팅 목록 업데이트에 실패했습니다.');
-                return;
-              }
-
-              if (updatedChats) {
-                const filteredChats = updatedChats.filter(chat => chat.user_id === currentUserId);
-                setChatThreads(filteredChats);
-              }
-            }
-          )
-          .subscribe();
-
-        return () => {
-          subscription.unsubscribe();
-        };
-      } catch {
-        toast.error('채팅 목록을 불러오는데 실패했습니다.');
-      }
-    };
-
-    fetchChatThreads();
-  }, [currentUserId]);
-
-  // Fetch current chat and messages
-  useEffect(() => {
-    const fetchChatAndMessages = async () => {
-      if (!selectedChat) return;
-
-      try {
-        const { data: chat, error: chatError } = await supabase
-          .from('chats')
-          .select('*')
-          .eq('id', selectedChat)
-          .single();
-
-        if (chatError) {
-          toast.error('채팅 내용을 불러오는데 실패했습니다.');
-          return;
-        }
-
-        if (chat) {
-          setCurrentChat(chat);
-        }
-
-        const { data: chatMessages, error: messagesError } = await supabase
-          .from('messages')
-          .select('*')
-          .eq('chat_id', selectedChat)
-          .order('created_at', { ascending: true });
-
-        if (messagesError) {
-          toast.error('메시지를 불러오는데 실패했습니다.');
-          return;
-        }
-
-        if (chatMessages) {
-          setMessages(chatMessages);
-        }
-      } catch {
-        toast.error('채팅 내용을 불러오는데 실패했습니다.');
-      }
-    };
-
-    fetchChatAndMessages();
-  }, [selectedChat]);
 
   const handleNewChatClick = () => {
     setIsNewChatModalOpen(true);
@@ -697,13 +708,6 @@ export default function ChatPage({ params }: PageProps) {
       setIsEditingTitle(false);
     }
   };
-
-  // 새 메시지가 추가될 때마다 스크롤을 아래로 이동
-  useEffect(() => {
-    if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
-    }
-  }, [messages]);
 
   // ModelSelector 컴포넌트를 읽기 전용으로 변경
   const ModelDisplay = () => (
