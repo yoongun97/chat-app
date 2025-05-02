@@ -42,7 +42,12 @@ interface PageProps {
 }
 
 export default function ChatPage({ params }: PageProps) {
-  const { data: session, status } = useSession();
+  const { data: session, status } = useSession({
+    required: true,
+    onUnauthenticated() {
+      router.push('/');
+    },
+  });
   const router = useRouter();
   const [message, setMessage] = useState('');
   const [userData, setUserData] = useState<UserData | null>(null);
@@ -174,14 +179,7 @@ export default function ChatPage({ params }: PageProps) {
           return;
         }
 
-        if (status === 'unauthenticated') {
-          console.log('User is not authenticated, redirecting to home...');
-          router.push('/');
-          return;
-        }
-
         if (!session?.user?.email) {
-          console.log('No user email found in session');
           setError('사용자 정보를 찾을 수 없습니다.');
           setIsLoading(false);
           return;
@@ -270,7 +268,9 @@ export default function ChatPage({ params }: PageProps) {
       }
     };
 
-    checkAuthAndFetchUser();
+    if (session) {
+      checkAuthAndFetchUser();
+    }
   }, [session, status, router]);
 
   // 현재 사용자 정보 조회
@@ -763,7 +763,15 @@ export default function ChatPage({ params }: PageProps) {
           <h2 className="text-xl font-semibold text-red-600 mb-2">오류가 발생했습니다</h2>
           <p className="text-gray-600">{error}</p>
           <button
-            onClick={() => router.push('/')}
+            onClick={async () => {
+              try {
+                await signOut({ redirect: false });
+                router.push('/');
+              } catch (err) {
+                console.error('Logout error:', err);
+                router.push('/');
+              }
+            }}
             className="mt-4 px-4 py-2 bg-gray-800 text-white rounded hover:bg-gray-700"
           >
             홈으로 돌아가기
@@ -779,7 +787,15 @@ export default function ChatPage({ params }: PageProps) {
         <div className="text-center">
           <h2 className="text-xl font-semibold text-gray-800 mb-2">사용자 정보를 찾을 수 없습니다</h2>
           <button
-            onClick={() => router.push('/')}
+            onClick={async () => {
+              try {
+                await signOut({ redirect: false });
+                router.push('/');
+              } catch (err) {
+                console.error('Logout error:', err);
+                router.push('/');
+              }
+            }}
             className="mt-4 px-4 py-2 bg-gray-800 text-white rounded hover:bg-gray-700"
           >
             홈으로 돌아가기
