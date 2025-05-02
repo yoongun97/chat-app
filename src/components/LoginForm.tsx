@@ -172,7 +172,7 @@ export default function LoginForm() {
         }
 
         router.push('/chat'); // 로그인 성공 후 리다이렉트
-      } catch (error) {
+      } catch {
         setPasswordError('로그인 중 오류가 발생했습니다.');
       }
     } else {

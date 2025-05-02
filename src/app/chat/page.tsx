@@ -7,7 +7,6 @@ import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
 import { getChatCompletion, Message, ChatModel } from '@/lib/openai';
 import toast from 'react-hot-toast';
-import { Bars3Icon as MenuIcon } from '@heroicons/react/24/outline';
 
 type MessageRole = 'user' | 'assistant';
 type MessageType = 'text' | 'image';
@@ -36,11 +35,13 @@ interface UserData {
   id: string;
 }
 
-interface Props {
-  chatId?: string;
+interface PageProps {
+  params: {
+    chatId: string;
+  };
 }
 
-export default function ChatPage({ chatId }: Props) {
+export default function ChatPage({ params }: PageProps) {
   const { data: session, status } = useSession();
   const router = useRouter();
   const [message, setMessage] = useState('');
@@ -48,7 +49,7 @@ export default function ChatPage({ chatId }: Props) {
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const [chatThreads, setChatThreads] = useState<ChatThread[]>([]);
-  const [selectedChat, setSelectedChat] = useState<string | null>(chatId || null);
+  const [selectedChat, setSelectedChat] = useState<string | null>(params.chatId || null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [currentChat, setCurrentChat] = useState<ChatThread | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -65,9 +66,7 @@ export default function ChatPage({ chatId }: Props) {
   // Fetch chat threads
   useEffect(() => {
     const fetchChatThreads = async () => {
-      if (!currentUserId) {
-        return;
-      }
+      if (!currentUserId) return;
 
       try {
         const { data: chats, error: chatsError } = await supabase
@@ -92,7 +91,7 @@ export default function ChatPage({ chatId }: Props) {
               table: 'chats',
               filter: `user_id=eq.${currentUserId}`
             },
-            async (payload) => {
+            async () => {
               const { data: updatedChats, error: updateError } = await supabase
                 .from('chats')
                 .select('*')
@@ -100,6 +99,7 @@ export default function ChatPage({ chatId }: Props) {
                 .order('last_visited_at', { ascending: false });
 
               if (updateError) {
+                toast.error('채팅 목록 업데이트에 실패했습니다.');
                 return;
               }
 
@@ -114,47 +114,51 @@ export default function ChatPage({ chatId }: Props) {
         return () => {
           subscription.unsubscribe();
         };
-      } catch (error) {
+      } catch {
         toast.error('채팅 목록을 불러오는데 실패했습니다.');
       }
     };
 
     fetchChatThreads();
-  }, [currentUserId, supabase]);
+  }, [currentUserId]);
 
   // Fetch current chat and messages
   useEffect(() => {
     const fetchChatAndMessages = async () => {
-      if (selectedChat) {
-        try {
-          // Fetch chat details
-          const { data: chat, error: chatError } = await supabase
-            .from('chats')
-            .select('*')
-            .eq('id', selectedChat)
-            .single();
+      if (!selectedChat) return;
 
-          if (chatError) throw chatError;
+      try {
+        const { data: chat, error: chatError } = await supabase
+          .from('chats')
+          .select('*')
+          .eq('id', selectedChat)
+          .single();
 
-          if (chat) {
-            setCurrentChat(chat);
-          }
-
-          // Fetch messages
-          const { data: chatMessages, error: messagesError } = await supabase
-            .from('messages')
-            .select('*')
-            .eq('chat_id', selectedChat)
-            .order('created_at', { ascending: true });
-
-          if (messagesError) throw messagesError;
-
-          if (chatMessages) {
-            setMessages(chatMessages);
-          }
-        } catch (error) {
+        if (chatError) {
           toast.error('채팅 내용을 불러오는데 실패했습니다.');
+          return;
         }
+
+        if (chat) {
+          setCurrentChat(chat);
+        }
+
+        const { data: chatMessages, error: messagesError } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('chat_id', selectedChat)
+          .order('created_at', { ascending: true });
+
+        if (messagesError) {
+          toast.error('메시지를 불러오는데 실패했습니다.');
+          return;
+        }
+
+        if (chatMessages) {
+          setMessages(chatMessages);
+        }
+      } catch {
+        toast.error('채팅 내용을 불러오는데 실패했습니다.');
       }
     };
 
@@ -241,7 +245,7 @@ export default function ChatPage({ chatId }: Props) {
             }
           }
         }
-      } catch (error) {
+      } catch {
         router.push('/');
       } finally {
         setIsLoading(false);
@@ -270,13 +274,13 @@ export default function ChatPage({ chatId }: Props) {
         if (user) {
           setCurrentUserId(user.id);
         }
-      } catch (error) {
+      } catch {
         // 에러 처리는 유지
       }
     };
 
     fetchCurrentUser();
-  }, [session, supabase]);
+  }, [session]);
 
   useEffect(() => {
     const loadInitialChats = async () => {
@@ -297,13 +301,13 @@ export default function ChatPage({ chatId }: Props) {
         if (chats) {
           setChatThreads(chats);
         }
-      } catch (error) {
+      } catch {
         toast.error('채팅방 목록을 불러오는데 실패했습니다.');
       }
     };
 
     loadInitialChats();
-  }, [currentUserId, supabase]);
+  }, [currentUserId]);
 
   useEffect(() => {
     if (!currentUserId) return;
@@ -317,7 +321,7 @@ export default function ChatPage({ chatId }: Props) {
           table: 'chats',
           filter: `user_id=eq.${currentUserId}`
         },
-        async (payload) => {
+        async () => {
           const { data: updatedChats, error: updateError } = await supabase
             .from('chats')
             .select('*')
@@ -340,7 +344,7 @@ export default function ChatPage({ chatId }: Props) {
     return () => {
       subscription.unsubscribe();
     };
-  }, [currentUserId, supabase]);
+  }, [currentUserId]);
 
   const handleNewChatClick = () => {
     setIsNewChatModalOpen(true);
@@ -398,7 +402,7 @@ export default function ChatPage({ chatId }: Props) {
       setIsNewChatModalOpen(false);
       router.push(`/chat/${newChatId}`);
       toast.success('새로운 채팅방이 생성되었습니다.');
-    } catch (error) {
+    } catch {
       toast.error('새 채팅방 생성에 실패했습니다. 다시 시도해주세요.');
     }
   };
@@ -447,34 +451,30 @@ export default function ChatPage({ chatId }: Props) {
     if ((!message.trim() && !imagePreview) || !selectedChat || isSending || !currentUserId) return;
 
     const timestamp = new Date().toISOString();
-    let userMessages: ChatMessage[] = [];
+    const userMessages: ChatMessage[] = [];
 
     try {
       if (imagePreview) {
-        // 이미지 메시지 추가
-        const imageMessage: ChatMessage = {
+        userMessages.push({
           id: crypto.randomUUID(),
           chat_id: selectedChat,
-          content: '이미지 메시지',  // 실제 이미지는 image_url에 저장
+          content: '이미지 메시지',
           role: 'user',
           created_at: timestamp,
           type: 'image',
           image_url: imagePreview
-        };
-        userMessages.push(imageMessage);
+        });
       }
 
       if (message.trim()) {
-        // 텍스트 메시지 추가
-        const textMessage: ChatMessage = {
+        userMessages.push({
           id: crypto.randomUUID(),
           chat_id: selectedChat,
           content: message.trim(),
           role: 'user',
           created_at: timestamp,
           type: 'text'
-        };
-        userMessages.push(textMessage);
+        });
       }
 
       // UI 업데이트
@@ -501,7 +501,7 @@ export default function ChatPage({ chatId }: Props) {
       if (messageError) throw messageError;
 
       // 첫 번째 유저 메시지인지 확인
-      const { data: existingUserMessages, error: messagesError } = await supabase
+      const { data: existingUserMessages } = await supabase
         .from('messages')
         .select('id')
         .eq('chat_id', selectedChat)
@@ -624,8 +624,8 @@ export default function ChatPage({ chatId }: Props) {
         setChatThreads(updatedChats);
       }
 
-    } catch (error) {
-      console.error('Error in handleSendMessage:', error);
+    } catch {
+      console.error('Error in handleSendMessage');
       setMessages(prev => prev.filter(msg => !userMessages.find(um => um.id === msg.id)));
       setMessage(message);
       setImagePreview(imagePreview);
@@ -665,7 +665,7 @@ export default function ChatPage({ chatId }: Props) {
       }
 
       toast.success('채팅방이 삭제되었습니다.');
-    } catch (error) {
+    } catch {
       toast.error('채팅방 삭제에 실패했습니다.');
     } finally {
       setIsDeleteModalOpen(false);
@@ -708,7 +708,7 @@ export default function ChatPage({ chatId }: Props) {
 
       setIsEditingTitle(false);
       toast.success('채팅방 제목이 수정되었습니다.');
-    } catch (error) {
+    } catch {
       toast.error('제목 수정에 실패했습니다.');
     }
   };
@@ -746,7 +746,7 @@ export default function ChatPage({ chatId }: Props) {
     try {
       await signOut({ redirect: false });
       router.push('/');
-    } catch (error) {
+    } catch {
       router.push('/');
     }
   };
@@ -904,11 +904,13 @@ export default function ChatPage({ chatId }: Props) {
                     : 'bg-gray-100 text-gray-800'
                 }`}
               >
-                {msg.type === 'image' ? (
-                  <img 
+                {msg.type === 'image' && msg.image_url ? (
+                  <Image 
                     src={msg.image_url} 
                     alt="Uploaded content" 
-                    className="max-w-full rounded"
+                    width={300}
+                    height={300}
+                    className="max-w-full rounded object-contain"
                   />
                 ) : (
                   msg.content
@@ -943,10 +945,12 @@ export default function ChatPage({ chatId }: Props) {
           {imagePreview && (
             <div className="p-2 border-b border-gray-200">
               <div className="relative inline-block">
-                <img 
+                <Image 
                   src={imagePreview} 
                   alt="Preview" 
-                  className="max-h-32 rounded"
+                  width={128}
+                  height={128}
+                  className="max-h-32 rounded object-contain"
                 />
                 <button
                   onClick={handleCancelImage}

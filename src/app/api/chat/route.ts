@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 
@@ -6,9 +6,9 @@ const openai = new OpenAI({
   apiKey: process.env.OPEN_AI_API_KEY,
 });
 
-export async function POST(req: Request) {
+export async function POST(request: NextRequest) {
   try {
-    const { messages, model } = await req.json();
+    const { messages, model } = await request.json();
 
     if (!messages || !Array.isArray(messages)) {
       return NextResponse.json(
