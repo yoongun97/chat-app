@@ -29,9 +29,11 @@ export default function LoginPage() {
 
       if (result?.ok) {
         toast.success('로그인 성공!');
-        // 새로운 채팅방 생성 없이 /chat으로 리다이렉트
-        router.push('/chat');
-        router.refresh();
+        // 로그인 성공 후 약간의 지연을 두고 리다이렉트
+        setTimeout(() => {
+          router.push('/chat');
+          router.refresh();
+        }, 500);
       }
     } catch (error) {
       console.error('Login error:', error);
