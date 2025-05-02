@@ -42,12 +42,7 @@ interface PageProps {
 }
 
 export default function ChatPage({ params }: PageProps) {
-  const { data: session, status } = useSession({
-    required: true,
-    onUnauthenticated() {
-      router.push('/');
-    },
-  });
+  const { data: session, status } = useSession();
   const router = useRouter();
   const [message, setMessage] = useState('');
   const [userData, setUserData] = useState<UserData | null>(null);
@@ -68,6 +63,161 @@ export default function ChatPage({ params }: PageProps) {
   const [isNewChatModalOpen, setIsNewChatModalOpen] = useState(false);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isInitializing, setIsInitializing] = useState(true);
+
+  // 세션 및 인증 상태 확인
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        if (status === 'loading') return;
+
+        if (status === 'unauthenticated') {
+          router.push('/');
+          return;
+        }
+
+        if (!session?.user?.email) {
+          setError('사용자 정보를 찾을 수 없습니다.');
+          return;
+        }
+
+        setIsInitializing(false);
+      } catch (err) {
+        console.error('Auth check error:', err);
+        setError('인증 확인 중 오류가 발생했습니다.');
+      }
+    };
+
+    checkAuth();
+  }, [session, status, router]);
+
+  // 사용자 데이터 로드
+  useEffect(() => {
+    const loadUserData = async () => {
+      if (isInitializing || !session?.user?.email) return;
+
+      try {
+        setIsLoading(true);
+        const { data: authUser, error: authError } = await supabase.auth.getUser();
+        
+        if (authError) {
+          console.error('Auth error:', authError);
+          setError('인증 오류가 발생했습니다.');
+          return;
+        }
+
+        const { data: existingUser, error: fetchError } = await supabase
+          .from('users')
+          .select('*')
+          .eq('email', session.user.email)
+          .single();
+
+        if (fetchError?.code === 'PGRST116') {
+          const username = session.user.email.split('@')[0];
+          
+          const { data: newUser, error: insertError } = await supabase
+            .from('users')
+            .insert([
+              {
+                id: authUser.user.id,
+                email: session.user.email,
+                username: username,
+                created_at: new Date().toISOString()
+              }
+            ])
+            .select()
+            .single();
+
+          if (insertError) {
+            console.error('Error creating new user:', insertError);
+            setError('사용자 프로필 생성에 실패했습니다.');
+            return;
+          }
+
+          setUserData(newUser);
+          setCurrentUserId(newUser.id);
+          toast.success('새 프로필이 생성되었습니다.');
+        } else if (fetchError) {
+          console.error('Error fetching user:', fetchError);
+          setError('사용자 정보를 불러오는데 실패했습니다.');
+          return;
+        } else {
+          setUserData(existingUser);
+          setCurrentUserId(existingUser.id);
+        }
+      } catch (err) {
+        console.error('User data loading error:', err);
+        setError('사용자 정보를 불러오는데 실패했습니다.');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadUserData();
+  }, [session, isInitializing]);
+
+  // 로딩 화면
+  if (isInitializing || isLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gray-100">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-gray-900 mb-4"></div>
+          <p className="text-gray-600">로딩 중...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 에러 화면
+  if (error) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gray-100">
+        <div className="text-center">
+          <h2 className="text-xl font-semibold text-red-600 mb-2">오류가 발생했습니다</h2>
+          <p className="text-gray-600 mb-4">{error}</p>
+          <button
+            onClick={async () => {
+              try {
+                await signOut({ redirect: false });
+                router.push('/');
+              } catch (err) {
+                console.error('Logout error:', err);
+                router.push('/');
+              }
+            }}
+            className="px-4 py-2 bg-gray-800 text-white rounded hover:bg-gray-700"
+          >
+            홈으로 돌아가기
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // 사용자 정보가 없는 경우
+  if (!userData) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gray-100">
+        <div className="text-center">
+          <h2 className="text-xl font-semibold text-gray-800 mb-2">사용자 정보를 찾을 수 없습니다</h2>
+          <button
+            onClick={async () => {
+              try {
+                await signOut({ redirect: false });
+                router.push('/');
+              } catch (err) {
+                console.error('Logout error:', err);
+                router.push('/');
+              }
+            }}
+            className="px-4 py-2 bg-gray-800 text-white rounded hover:bg-gray-700"
+          >
+            홈으로 돌아가기
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // Fetch chat threads
   useEffect(() => {
@@ -170,199 +320,6 @@ export default function ChatPage({ params }: PageProps) {
 
     fetchChatAndMessages();
   }, [selectedChat]);
-
-  // 세션 체크 및 사용자 데이터 로드
-  useEffect(() => {
-    const checkAuthAndFetchUser = async () => {
-      try {
-        if (status === 'loading') {
-          return;
-        }
-
-        if (!session?.user?.email) {
-          setError('사용자 정보를 찾을 수 없습니다.');
-          setIsLoading(false);
-          return;
-        }
-
-        const { data: authUser, error: authError } = await supabase.auth.getUser();
-        
-        if (authError) {
-          console.error('Auth error:', authError);
-          setError('인증 오류가 발생했습니다.');
-          setIsLoading(false);
-          return;
-        }
-
-        const { data: existingUser, error: fetchError } = await supabase
-          .from('users')
-          .select('*')
-          .eq('email', session.user.email)
-          .single();
-
-        if (fetchError?.code === 'PGRST116') {
-          const username = session.user.email.split('@')[0];
-          
-          const { data: newUser, error: insertError } = await supabase
-            .from('users')
-            .insert([
-              {
-                id: authUser.user.id,
-                email: session.user.email,
-                username: username,
-                created_at: new Date().toISOString()
-              }
-            ])
-            .select()
-            .single();
-
-          if (insertError) {
-            console.error('Error creating new user:', insertError);
-            setError('사용자 프로필 생성에 실패했습니다.');
-            setIsLoading(false);
-            return;
-          }
-
-          setUserData(newUser);
-          setCurrentUserId(newUser.id);
-          toast.success('새 프로필이 생성되었습니다.');
-        } else if (fetchError) {
-          console.error('Error fetching user:', fetchError);
-          setError('사용자 정보를 불러오는데 실패했습니다.');
-          setIsLoading(false);
-          return;
-        } else {
-          if (existingUser.id !== authUser.user.id) {
-            const { error: updateError } = await supabase
-              .from('users')
-              .update({ id: authUser.user.id })
-              .eq('email', session.user.email);
-            
-            if (updateError) {
-              console.error('Error updating user:', updateError);
-              setError('사용자 정보 업데이트에 실패했습니다.');
-              setIsLoading(false);
-              return;
-            }
-            
-            const { data: updatedUser } = await supabase
-              .from('users')
-              .select('*')
-              .eq('email', session.user.email)
-              .single();
-              
-            if (updatedUser) {
-              setUserData(updatedUser);
-              setCurrentUserId(updatedUser.id);
-            }
-          } else {
-            setUserData(existingUser);
-            setCurrentUserId(existingUser.id);
-          }
-        }
-      } catch (err) {
-        console.error('Unexpected error:', err);
-        setError('예기치 않은 오류가 발생했습니다.');
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    if (session) {
-      checkAuthAndFetchUser();
-    }
-  }, [session, status, router]);
-
-  // 현재 사용자 정보 조회
-  useEffect(() => {
-    const fetchCurrentUser = async () => {
-      if (!session?.user?.email) return;
-
-      try {
-        const { data: user, error } = await supabase
-          .from('users')
-          .select('id, email')
-          .eq('email', session.user.email)
-          .single();
-
-        if (error) {
-          return;
-        }
-
-        if (user) {
-          setCurrentUserId(user.id);
-        }
-      } catch {
-        // 에러 처리는 유지
-      }
-    };
-
-    fetchCurrentUser();
-  }, [session]);
-
-  useEffect(() => {
-    const loadInitialChats = async () => {
-      if (!currentUserId) return;
-
-      try {
-        const { data: chats, error } = await supabase
-          .from('chats')
-          .select('*')
-          .eq('user_id', currentUserId)
-          .order('last_visited_at', { ascending: false });
-
-        if (error) {
-          toast.error('채팅방 목록을 불러오는데 실패했습니다.');
-          return;
-        }
-
-        if (chats) {
-          setChatThreads(chats);
-        }
-      } catch {
-        toast.error('채팅방 목록을 불러오는데 실패했습니다.');
-      }
-    };
-
-    loadInitialChats();
-  }, [currentUserId]);
-
-  useEffect(() => {
-    if (!currentUserId) return;
-
-    const subscription = supabase
-      .channel('chat_updates')
-      .on('postgres_changes', 
-        {
-          event: '*',
-          schema: 'public',
-          table: 'chats',
-          filter: `user_id=eq.${currentUserId}`
-        },
-        async () => {
-          const { data: updatedChats, error: updateError } = await supabase
-            .from('chats')
-            .select('*')
-            .eq('user_id', currentUserId)
-            .order('last_visited_at', { ascending: false });
-
-          if (updateError) {
-            toast.error('채팅방 목록 업데이트에 실패했습니다.');
-            return;
-          }
-
-          if (updatedChats) {
-            const filteredChats = updatedChats.filter(chat => chat.user_id === currentUserId);
-            setChatThreads(filteredChats);
-          }
-        }
-      )
-      .subscribe();
-
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, [currentUserId]);
 
   const handleNewChatClick = () => {
     setIsNewChatModalOpen(true);
@@ -748,72 +705,6 @@ export default function ChatPage({ params }: PageProps) {
     }
   }, [messages]);
 
-  if (isLoading) {
-    return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-gray-900"></div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="text-center">
-          <h2 className="text-xl font-semibold text-red-600 mb-2">오류가 발생했습니다</h2>
-          <p className="text-gray-600">{error}</p>
-          <button
-            onClick={async () => {
-              try {
-                await signOut({ redirect: false });
-                router.push('/');
-              } catch (err) {
-                console.error('Logout error:', err);
-                router.push('/');
-              }
-            }}
-            className="mt-4 px-4 py-2 bg-gray-800 text-white rounded hover:bg-gray-700"
-          >
-            홈으로 돌아가기
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (!userData) {
-    return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="text-center">
-          <h2 className="text-xl font-semibold text-gray-800 mb-2">사용자 정보를 찾을 수 없습니다</h2>
-          <button
-            onClick={async () => {
-              try {
-                await signOut({ redirect: false });
-                router.push('/');
-              } catch (err) {
-                console.error('Logout error:', err);
-                router.push('/');
-              }
-            }}
-            className="mt-4 px-4 py-2 bg-gray-800 text-white rounded hover:bg-gray-700"
-          >
-            홈으로 돌아가기
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  const handleLogout = async () => {
-    try {
-      await signOut({ redirect: false });
-      router.push('/');
-    } catch {
-      router.push('/');
-    }
-  };
-
   // ModelSelector 컴포넌트를 읽기 전용으로 변경
   const ModelDisplay = () => (
     <div className="ml-2 p-1 text-sm text-gray-600">
@@ -896,7 +787,15 @@ export default function ChatPage({ params }: PageProps) {
         {/* 하단 메뉴 */}
         <div className="border-t border-gray-200">
           <button
-            onClick={handleLogout}
+            onClick={async () => {
+              try {
+                await signOut({ redirect: false });
+                router.push('/');
+              } catch (err) {
+                console.error('Logout error:', err);
+                router.push('/');
+              }
+            }}
             className="w-full px-4 py-3 text-left text-red-500 hover:bg-gray-200 flex items-center gap-3 transition-colors"
           >
             <span className="text-red-500">↪</span>
