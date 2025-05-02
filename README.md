@@ -91,7 +91,7 @@ cp .env.example .env.local
 ```env
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
-OPENAI_API_KEY=your_openai_api_key
+OPEN_AI_API_KEY=your_openai_api_key
 ```
 
 3. 개발 서버 실행

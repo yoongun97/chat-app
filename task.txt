@@ -113,7 +113,7 @@
 ### Task 8.1 배포
 
 - [ ]  Vercel에 배포 (Supabase 연결 확인)
-- [ ]  환경 변수 (`OPENAI_API_KEY`, `SUPABASE_URL`, `ANON_KEY`) 설정
+- [ ]  환경 변수 (``, `SUPABASE_URL`, `ANON_KEY`) 설정
 
 ### Task 8.2 최종 QA
 
