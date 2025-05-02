@@ -5,8 +5,9 @@ import { useSession, signOut } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
-import { getChatCompletion, Message } from '@/lib/openai';
+import { getChatCompletion, Message, ChatModel } from '@/lib/openai';
 import toast from 'react-hot-toast';
+import { Bars3Icon as MenuIcon } from '@heroicons/react/24/outline';
 
 interface ChatMessage {
   id: string;
@@ -21,6 +22,7 @@ interface ChatThread {
   title: string | null;
   created_at: string;
   last_visited_at: string;
+  model: ChatModel;
 }
 
 interface UserData {
@@ -51,6 +53,8 @@ export default function ChatPage({ chatId }: Props) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [selectedModel, setSelectedModel] = useState<ChatModel>('gpt-4.1-mini');
+  const [isNewChatModalOpen, setIsNewChatModalOpen] = useState(false);
 
   // Fetch chat threads
   useEffect(() => {
@@ -332,6 +336,15 @@ export default function ChatPage({ chatId }: Props) {
     };
   }, [currentUserId, supabase]);
 
+  const handleNewChatClick = () => {
+    setIsNewChatModalOpen(true);
+  };
+
+  const handleNewChatCancel = () => {
+    setIsNewChatModalOpen(false);
+    setSelectedModel('gpt-4.1-mini'); // 기본값으로 리셋
+  };
+
   const handleNewChat = async () => {
     if (!currentUserId) {
       toast.error('로그인이 필요합니다.');
@@ -350,7 +363,7 @@ export default function ChatPage({ chatId }: Props) {
             user_id: currentUserId,
             created_at: timestamp,
             last_visited_at: timestamp,
-            title: null
+            model: selectedModel
           }
         ]);
 
@@ -376,6 +389,7 @@ export default function ChatPage({ chatId }: Props) {
         return;
       }
 
+      setIsNewChatModalOpen(false);
       router.push(`/chat/${newChatId}`);
       toast.success('새로운 채팅방이 생성되었습니다.');
     } catch (error) {
@@ -407,16 +421,42 @@ export default function ChatPage({ chatId }: Props) {
 
       if (messageError) throw messageError;
 
-      const { error: updateError } = await supabase
+      // 첫 번째 유저 메시지인지 확인
+      const { data: existingUserMessages, error: messagesError } = await supabase
+        .from('messages')
+        .select('id')
+        .eq('chat_id', selectedChat)
+        .eq('role', 'user');  // 유저 메시지만 확인
+
+      const isFirstUserMessage = !existingUserMessages || existingUserMessages.length === 1;
+
+      const { data: updateData, error: updateError } = await supabase
         .from('chats')
         .update({
           last_visited_at: timestamp,
-          ...(messages.length === 0 ? { title: message.slice(0, 50) } : {})
+          ...(isFirstUserMessage ? { title: message.slice(0, 50) } : {})
         })
         .eq('id', selectedChat)
-        .eq('user_id', currentUserId);
+        .eq('user_id', currentUserId)
+        .select();
 
       if (updateError) throw updateError;
+
+      // title이 업데이트된 경우 현재 채팅 정보도 업데이트
+      if (isFirstUserMessage && updateData?.[0]) {
+        const updatedChat = updateData[0];
+        setCurrentChat(prev => 
+          prev ? { ...prev, title: updatedChat.title } : null
+        );
+        
+        setChatThreads(prev => 
+          prev.map(chat => 
+            chat.id === selectedChat 
+              ? { ...chat, title: updatedChat.title } 
+              : chat
+          )
+        );
+      }
 
       const messageHistory: Message[] = [
         ...messages.map(msg => ({
@@ -426,7 +466,7 @@ export default function ChatPage({ chatId }: Props) {
         { role: 'user', content: message }
       ];
 
-      const gptResponse = await getChatCompletion(messageHistory);
+      const gptResponse = await getChatCompletion(messageHistory, currentChat?.model || 'gpt-4.1-mini');
 
       if (gptResponse) {
         const assistantMessage = {
@@ -581,6 +621,13 @@ export default function ChatPage({ chatId }: Props) {
     }
   };
 
+  // ModelSelector 컴포넌트를 읽기 전용으로 변경
+  const ModelDisplay = () => (
+    <div className="ml-2 p-1 text-sm text-gray-600">
+      {currentChat?.model === 'gpt-4.1-mini' ? 'GPT-4.1 Mini' : 'GPT-4 Audio Preview'}
+    </div>
+  );
+
   return (
     <div className="flex h-screen">
       {/* 모바일 사이드바 토글 버튼 */}
@@ -601,7 +648,7 @@ export default function ChatPage({ chatId }: Props) {
           {/* New Chat 버튼 */}
           <div className="p-4">
             <button
-              onClick={handleNewChat}
+              onClick={handleNewChatClick}
               className="w-full bg-white text-gray-800 font-semibold py-2 px-4 border border-gray-300 rounded-lg hover:bg-gray-50 flex items-center justify-center gap-2 transition-colors"
             >
               <span>+ New Chat</span>
@@ -702,6 +749,7 @@ export default function ChatPage({ chatId }: Props) {
           >
             ✏️
           </button>
+          {selectedChat && <ModelDisplay />}
         </div>
 
         {/* 채팅 메시지 영역 */}
@@ -801,6 +849,42 @@ export default function ChatPage({ chatId }: Props) {
                 className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 transition-colors"
               >
                 삭제
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 새 채팅방 생성 모달 */}
+      {isNewChatModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-sm w-full mx-4">
+            <h3 className="text-lg font-semibold mb-4">새 채팅방 생성</h3>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                모델 선택
+              </label>
+              <select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value as ChatModel)}
+                className="w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-gray-200"
+              >
+                <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
+                <option value="gpt-4o-mini-audio-preview">GPT-4 Audio Preview</option>
+              </select>
+            </div>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={handleNewChatCancel}
+                className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+              >
+                취소
+              </button>
+              <button
+                onClick={handleNewChat}
+                className="px-4 py-2 bg-gray-800 text-white rounded hover:bg-gray-700 transition-colors"
+              >
+                생성
               </button>
             </div>
           </div>
