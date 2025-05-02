@@ -23,7 +23,7 @@ export default withAuth(
   },
   {
     callbacks: {
-      authorized: ({ token }) => true, // We'll handle the auth check in the middleware function
+      authorized: () => true, // We'll handle the auth check in the middleware function
     },
   }
 );
